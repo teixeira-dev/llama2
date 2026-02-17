@@ -39,9 +39,9 @@ def precompute_theta_pos_frequencies(head_dim: int, max_seq_len: int, device: st
     return freqs_cis
 
 def apply_rotary_embeddings(x: torch.Tensor, freqs_cis: torch.Tensor, device: str):
-    # x is (B , seqlen, head_dim)
+    # x is (B , seqlen, n_heads, head_dim)
     # basically turns all into x + yi, after grouping every 2 dimensions
-    complex_x = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2)) # becomes B, seqlen, head_dim // 2
+    complex_x = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2)) # becomes B, seqlen, n_heads, head_dim // 2
     
     # (max_seq_len, head_dim/2) - > (1, max_seqlen, 1, head_dim / 2)
     freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(2)
@@ -67,6 +67,83 @@ class RMSNorm(nn.Module):
         x_weighted = x_norm * self.weight
 
         return x_weighted
+
+class SelfAttention(nn.Module):
+    def __init__(self, args: ModelArgs):
+        super().__init__()
+
+        self.n_heads_q = args.n_heads
+        self.n_heads_kv = args.n_kv_heads if args.n_kv_heads is not None else args.n_heads
+
+        self.head_dim = args.dim // self.n_heads_q
+        self.n_rep = self.n_heads_q // self.n_heads_kv
+
+        self.wq = nn.Linear(args.dim, self.head_dim * self.n_heads_q, bias=False)
+        self.wk = nn.Linear(args.dim, self.head_dim * self.n_heads_kv, bias=False)
+        self.wv = nn.Linear(args.dim, self.head_dim * self.n_heads_kv, bias=False)
+        self.wo = nn.Linear(self.n_heads_q * self.head_dim, args.dim, bias=False)
+
+        self.cache_k = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_heads_kv, self.head_dim))
+        self.cache_v = torch.zeros((args.max_batch_size, args.max_seq_len, self.n_heads_kv, self.head_dim))
+
+    def forward(self, x: torch.Tensor, start_pos: int, freqs_cis: torch.Tensor):
+        # x being shaped (B, 1, dim)
+        B, T, _ = x.shape
+
+        # (b, 1, n_heads * head_dim)
+        xq = self.wq(x)
+        xk = self.wk(x)
+        xv = self.wv(x)
+
+        xq = xq.view(B, T, self.n_heads_q, self.head_dim)
+        xk = xk.view(B, T, self.n_heads_kv, self.head_dim)
+        xv = xv.view(B, T, self.n_heads_kv, self.head_dim)
+
+        xq = apply_rotary_embeddings(xq, freqs_cis, device=x.device)
+        xk = apply_rotary_embeddings(xk, freqs_cis, device=x.device)
+
+
+        self.cache_k[:B, start_pos:start_pos+T] = xk
+        self.cache_v[:B, start_pos:start_pos+T] = xv
+        
+        xk = self.cache_k[:B, :start_pos + T]
+        xv = self.cache_v[:B, :start_pos + T]
+        
+        # (b, t, n_heads_kv, head_dim) so far, goal: (b, t, n_heads_q, head_dim), how? Replicating n_rep times
+        xq = xq.permute(0, 2, 1, 3) # (B, T, n_heads, head_dim) -> (B, n_heads, T, head_dim)
+        xk = xk.repeat_interleave(self.n_rep, dim=2).permute(0, 2, 3, 1) # (b, n_heads_q, head_dim, t)
+        xv = xv.repeat_interleave(self.n_rep, dim=2).permute(0, 2, 1, 3) # (b, n_heads_q, t, head_dim)
+
+        scores = torch.matmul(xq, xk) / math.sqrt(self.head_dim)
+
+        # So, scores are (B, n_heads, 1, T), because there will be only 1 query,
+        # hence, we don't need tril mask
+        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+        
+        # as values are (B, n_heads, T, head_dim)
+        attended = torch.matmul(scores, xv)
+        # attended is (B, n_heads, 1, head_dim)
+        pre_out = attended.squeeze(2).view(B, self.n_heads_q * self.head_dim)
+
+        return self.wo(pre_out)
+
+class EncoderBlock(nn.Module):
+    def __init__(self, args: ModelArgs):
+
+        self.n_heads = args.n_heads
+        self.dim = args.dim
+        self.head_dim = args.dim // args.n_heads
+
+        self.attention = SelfAttention(args)
+        self.attention_norm = RMSNorm(args.dim, args.norm_eps)
+
+        self.feed_forward = FeedForward(args)
+        self.ffn_norm = RMSNorm(args.dim, args.norm_eps)
+
+    def forward(self, x):
+        attended_x = self.attention(self.attention_norm(x))
+        out = self.ffw_norm = self.feed_forward(self.ffn_norm(x))
+        return out
 
 class Transformer(nn.Module):
     def __init__(self, args: ModelArgs):
