@@ -17,8 +17,8 @@ class ModelArgs:
     norm_eps: float = 1e-5
 
     #kv cache
-    max_batch_size: int = 32
-    max_seq_len: int = 2048
+    max_batch_size: int = 1
+    max_seq_len: int = 512
 
     device: str = None
 
@@ -149,12 +149,12 @@ class FeedForward(nn.Module):
         x_V = self.w3(x)
         
         x = self.w2(swish * x_V)
-        
+
         return x
 
 class EncoderBlock(nn.Module):
     def __init__(self, args: ModelArgs):
-
+        super().__init__()
         self.n_heads = args.n_heads
         self.dim = args.dim
         self.head_dim = args.dim // args.n_heads
@@ -167,7 +167,7 @@ class EncoderBlock(nn.Module):
 
     def forward(self, x):
         attended_x = self.attention(self.attention_norm(x))
-        out = self.ffw_norm = self.feed_forward(self.ffn_norm(x))
+        out = self.ffw_norm = self.feed_forward(self.ffn_norm(attended_x))
         return out
 
 class Transformer(nn.Module):
