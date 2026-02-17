@@ -22,6 +22,13 @@ class ModelArgs:
 
     device: str = None
 
+def precompute_theta_pos_frequencies(dim, rope_theta):
+    # if dim = 256
+    thetas = [theta for theta in [rope_theta**((-2*i/dim)) for i in range(dim//2)] for _ in range(2)]
+    thetas_tensor = torch.tensor(thetas)
+    cos_thetas = torch.cos(thetas_tensor)
+    sin_thetas = torch.sin(thetas_tensor)
+    return cos_thetas, sin_thetas
 
 class Transformer(nn.Module):
     def __init__(self, args: ModelArgs):
