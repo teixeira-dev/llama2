@@ -38,6 +38,19 @@ def precompute_theta_pos_frequencies(head_dim: int, max_seq_len: int, device: st
     freqs_cis = torch.polar(torch.ones_like(token_thetas), token_thetas)
     return freqs_cis
 
+def apply_rotary_embeddings(x: torch.Tensor, freqs_cis: torch.Tensor, device: str):
+    # x is (B , seqlen, head_dim)
+    # basically turns all into x + yi, after grouping every 2 dimensions
+    complex_x = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2)) # becomes B, seqlen, head_dim // 2
+    
+    # (max_seq_len, head_dim/2) - > (1, max_seqlen, 1, head_dim / 2)
+    freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(2)
+
+    # rotates by the freqs_cis, multiplying by the cis(theta)s
+    rotated_complex_x = complex_x * freqs_cis
+
+    rotated_real_x = torch.view_as_real(rotated_complex_x).reshape(*x.shape)
+    return rotated_real_x
 
 class Transformer(nn.Module):
     def __init__(self, args: ModelArgs):
