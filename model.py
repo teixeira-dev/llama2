@@ -52,6 +52,22 @@ def apply_rotary_embeddings(x: torch.Tensor, freqs_cis: torch.Tensor, device: st
     rotated_real_x = torch.view_as_real(rotated_complex_x).reshape(*x.shape)
     return rotated_real_x
 
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+    
+    def forward(self, x: torch.Tensor):
+        # x is (B, seqlen, dim),
+        # rms is (B, seqlen, 1)
+        rms_inv = torch.rsqrt(x.pow(2).mean(dim=-1) + self.eps).unsqueeze(-1)
+
+        x_norm = x * rms_inv
+        x_weighted = x_norm * self.weight
+
+        return x_weighted
+
 class Transformer(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
