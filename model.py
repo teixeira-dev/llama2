@@ -22,13 +22,22 @@ class ModelArgs:
 
     device: str = None
 
-def precompute_theta_pos_frequencies(dim, rope_theta):
+def precompute_theta_pos_frequencies(head_dim: int, max_seq_len: int, device: str, rope_theta: float = 10000.0):
+    
+    assert head_dim % 2 == 0, "head_dim must be even for rope"
+    
     # if dim = 256
-    thetas = [theta for theta in [rope_theta**((-2*i/dim)) for i in range(dim//2)] for _ in range(2)]
-    thetas_tensor = torch.tensor(thetas)
-    cos_thetas = torch.cos(thetas_tensor)
-    sin_thetas = torch.sin(thetas_tensor)
-    return cos_thetas, sin_thetas
+    theta_positions = torch.arange(0, head_dim, 2).float()
+    # theta_i = B**(-2i/dim)
+    theta_values = 1.0 / (rope_theta**(theta_positions/head_dim)).to(device).view(1, head_dim//2) # head_dim / 2 thetas
+    m = torch.arange(max_seq_len, device=device).float().view(max_seq_len, 1) # max_seqlen, 1
+    token_thetas = m @ theta_values # max_seqlen, head_dim / 2
+
+    # basically, creates cis(theta) for every theta, this is, e^(i*theta)
+    # torch polar receives (magnitudes, angles), so its creating a bunch of 1*cis(thetas)
+    freqs_cis = torch.polar(torch.ones_like(token_thetas), token_thetas)
+    return freqs_cis
+
 
 class Transformer(nn.Module):
     def __init__(self, args: ModelArgs):

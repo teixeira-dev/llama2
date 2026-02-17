@@ -3,3 +3,4 @@ LICENSE
 tokenizer*
 USE_*
 llama-2-7b
+*.ipynb
